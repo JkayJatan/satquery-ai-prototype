@@ -92,11 +92,3 @@ VLM_MODEL = "gpt-4o-mini"
 *Note: If credentials are not set, SatQuery AI automatically operates using its built-in remote sensing fallback engine.*
 
 ---
-
-## ☁️ Deployment to Streamlit Community Cloud
-
-1. Push this repository to GitHub.
-2. Go to [share.streamlit.io](https://share.streamlit.io) and click **"New app"**.
-3. Select your repository, branch, and set Main file path to `app.py`.
-4. In **App settings > Secrets**, paste your `VLM_API_KEY` and `VLM_API_URL` (optional).
-5. Click **"Deploy"**! All dependencies in `requirements.txt` (`streamlit`, `opencv-python-headless`, `scikit-image`, `pillow`, `requests`, `numpy`) will install automatically out-of-the-box.

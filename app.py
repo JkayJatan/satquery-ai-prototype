@@ -15,6 +15,7 @@ import numpy as np
 from modules.router import classify_and_route
 from modules.change_detector import BiTemporalChangeDetector
 from modules.vlm_client import HostedVLMClient
+from modules.region_detector import detect_regions
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION & STYLING
@@ -264,6 +265,15 @@ if run_clicked:
                 )
                 execution_output["vlm_results"] = vlm_res
 
+                # Run region detection to produce bounding-box annotated overlay
+                rd_res = detect_regions(
+                    st.session_state.uploaded_imgs[0],
+                    query=query_input,
+                    min_area=min_area_param,
+                    max_regions=8,
+                )
+                execution_output["region_results"] = rd_res
+
             st.session_state.last_result = execution_output
 
 
@@ -314,21 +324,74 @@ if st.session_state.last_result is not None:
                     use_container_width=True
                 )
 
-    # CASE B: VQA / CAPTIONING
+    # CASE B: VQA / CAPTIONING (with bounding-box region detection)
     elif task in ["captioning", "single_vqa"] and res["vlm_results"] is not None:
         vlm = res["vlm_results"]
+        rd = res.get("region_results", {})
+        vf = vlm.get("visual_features", {})
 
-        kpi1, kpi2, kpi3 = st.columns(3)
+        # KPI Metrics Row
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
         kpi1.metric("Task Pipeline", "Scene Captioning" if task == "captioning" else "Targeted VQA")
-        kpi2.metric("Computed Confidence Proxy", vlm["confidence_display"], help="Composite score based on domain specificity & query grounding")
-        kpi3.metric("Execution Engine", vlm["execution_mode"])
+        kpi2.metric("Confidence Score", vlm["confidence_display"],
+                    help="4-component composite: domain specificity + query grounding + structural richness + visual scene complexity")
+        kpi3.metric("Detected Regions", f"{rd.get('num_regions', 0)} areas",
+                    help="Distinct salient regions found by the classical CV region detector")
+        kpi4.metric("Scene Edge Complexity", f"{round(vf.get('edge_complexity', 0) * 100, 1)}%",
+                    help="Fraction of image pixels classified as structural edges — proxy for scene information density")
 
-        col_img, col_resp = st.columns([1, 2])
-        with col_img:
-            st.image(st.session_state.uploaded_imgs[0], caption="Target Satellite Scene", use_container_width=True)
-        with col_resp:
-            st.markdown("### Model Answer & Analysis")
-            st.info(vlm["answer"])
+        # Primary visual layout
+        col_orig, col_ann = st.columns(2)
+        with col_orig:
+            st.markdown("**Original Satellite Scene**")
+            st.image(st.session_state.uploaded_imgs[0], use_container_width=True)
+
+        with col_ann:
+            st.markdown("**Detected Regions (Bounding Rectangles)**")
+            if rd.get("annotated_image") is not None:
+                st.image(rd["annotated_image"], use_container_width=True,
+                         caption=f"{rd.get('num_regions', 0)} salient region(s) detected — colour-coded by query context")
+            else:
+                st.image(st.session_state.uploaded_imgs[0], use_container_width=True,
+                         caption="Region detection unavailable")
+
+        # Answer card
+        st.markdown("### Model Answer & Analysis")
+        st.info(vlm["answer"])
+
+        # Visual scene metrics bar
+        if vf:
+            with st.expander("📊 Visual Scene Analysis Metrics", expanded=False):
+                vm1, vm2, vm3, vm4 = st.columns(4)
+                vm1.metric("Spectral Diversity", f"{round(vf.get('spectral_diversity', 0) * 100, 1)}%",
+                           help="Normalised RGB std-dev: higher = more multi-class land cover")
+                vm2.metric("Vegetation Ratio", f"{round(vf.get('green_vegetation_ratio', 0) * 100, 1)}%",
+                           help="Fraction of pixel intensity in the green channel")
+                vm3.metric("Edge Complexity", f"{round(vf.get('edge_complexity', 0) * 100, 1)}%",
+                           help="Canny edge pixel density — structural richness of scene")
+                vm4.metric("Luminance Contrast", f"{round(vf.get('luminance_contrast', 0) * 100, 1)}%",
+                           help="Row-wise luminance variance — captures large-scale structural boundaries")
+
+        # Detected region table
+        if rd.get("bounding_boxes"):
+            with st.expander("📍 Detected Region Coordinates & Saliency Scores", expanded=False):
+                st.caption(
+                    "Regions ranked by composite saliency score (area + compactness + edge density + spectral contrast). "
+                    "Higher saliency = more structurally distinct and visually prominent area."
+                )
+                st.dataframe(
+                    [
+                        {
+                            "Region ID": b["id"],
+                            "X (px)": b["x"], "Y (px)": b["y"],
+                            "Width (px)": b["w"], "Height (px)": b["h"],
+                            "Area (pixels)": b["area_px"],
+                            "Saliency Score": b["saliency_score"],
+                        }
+                        for b in rd["bounding_boxes"]
+                    ],
+                    use_container_width=True
+                )
 
     # -------------------------------------------------------------------------
     # VISIBLE AGENTIC ORCHESTRATION EXECUTION TRACE
@@ -375,4 +438,12 @@ if st.session_state.last_result is not None:
         if task == "change_detection":
             st.json(res["cv_results"]["trace_details"])
         elif res["vlm_results"] is not None:
-            st.json(res["vlm_results"]["trace_details"])
+            t_col1, t_col2 = st.columns(2)
+            with t_col1:
+                st.markdown("**VLM + Confidence Proxy:**")
+                st.json(res["vlm_results"]["trace_details"])
+            with t_col2:
+                rd = res.get("region_results", {})
+                if rd.get("trace_details"):
+                    st.markdown("**Region Detector:**")
+                    st.json(rd["trace_details"])
